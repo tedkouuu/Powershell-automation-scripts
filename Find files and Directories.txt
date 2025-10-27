@@ -1,0 +1,89 @@
+
+
+
+$drives = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -ne $null }
+if (-not $drives -or $drives.Count -eq 0) { Write-Host "Няма намерени файлови дялове." -ForegroundColor Red; exit }
+
+Write-Host "Налични дялове:" -ForegroundColor Cyan
+for ($i = 0; $i -lt $drives.Count; $i++) {
+    Write-Host ("{0}: {1}  ({2})" -f $i, $drives[$i].Root, $drives[$i].Description)
+}
+
+
+$diskNumber = Read-Host "Въведи номера на дяла, в който да се търси"
+if ($diskNumber -notmatch '^\d+$' -or [int]$diskNumber -ge $drives.Count) {
+    Write-Host "Невалиден номер на дял!" -ForegroundColor Red; exit
+}
+$driveRoot = $drives[[int]$diskNumber].Root.TrimEnd('\')
+
+
+$searchInput = Read-Host "Въведи една или повече думи за търсене"
+if ([string]::IsNullOrWhiteSpace($searchInput)) { Write-Host "Не е въведен текст за търсене." -ForegroundColor Red; exit }
+$terms   = $searchInput -split '\s+' | Where-Object { $_.Trim() -ne '' }
+$pattern = ($terms | ForEach-Object { [regex]::Escape($_) }) -join '|'
+
+
+$targets = @(
+    Join-Path $driveRoot 'Users\*\Desktop'
+    Join-Path $driveRoot 'Users\*\Documents'
+    Join-Path $driveRoot 'Users\*\Downloads'
+)
+
+
+$results = New-Object System.Collections.Generic.List[string]
+Write-Host "`n=== Търсене в потребителски папки на $driveRoot\ ===" -ForegroundColor Cyan
+foreach ($t in $targets) {
+    Write-Host ("Проверявам: {0}" -f $t) -ForegroundColor Yellow
+    try {
+        Get-ChildItem -Path $t -Recurse -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -imatch $pattern } |
+            ForEach-Object {
+                # Добавя пълния път (за папки и файлове)
+                $results.Add($_.FullName)
+            }
+    } catch {
+        Write-Host ("Грешка при достъп: {0}" -f $t) -ForegroundColor DarkYellow
+    }
+}
+
+
+Write-Host "`n=== Търсене в Кошчето ===" -ForegroundColor Cyan
+try {
+    $shell    = New-Object -ComObject Shell.Application
+    $recycle  = $shell.Namespace(0x0a)  # Recycle Bin
+    if ($recycle -ne $null) {
+        $items = $recycle.Items()
+        foreach ($item in $items) {
+            if ($item.Name -imatch $pattern) {
+                # Опит да извлечем "Original Location" (на различни езици)
+                $origLoc = $null
+                for ($col = 0; $col -lt 50; $col++) {
+                    $name = $recycle.GetDetailsOf($null, $col)
+                    if ($name -in @('Original Location','Местоположение','Исходное расположение','Originele locatie','Ubicación original')) {
+                        $origLoc = $recycle.GetDetailsOf($item, $col); break
+                    }
+                }
+                if ($origLoc) {
+                    # Сглобяваме „виртуален“ път за яснота
+                    $virtualPath = Join-Path $origLoc $item.Name
+                    $results.Add("RecycleBin:\$virtualPath")
+                } else {
+                    $results.Add("RecycleBin:\$($item.Name)")
+                }
+            }
+        }
+    } else {
+        Write-Host "Кошчето не е достъпно." -ForegroundColor DarkYellow
+    }
+} catch {
+    Write-Host "Възникна проблем при достъп до Кошчето." -ForegroundColor DarkYellow
+}
+
+# 7) Извеждане на ПЪЛНИТЕ пътища (няма скъсяване)
+if ($results.Count -gt 0) {
+    Write-Host "`n=== Намерени съвпадения (пълни пътища) ===" -ForegroundColor Green
+    $results | Sort-Object -Unique | ForEach-Object { $_ }   # по един ред, без таблици/скъсяване
+} else {
+    Write-Host "`nНяма намерени съвпадения." -ForegroundColor Red
+}
+

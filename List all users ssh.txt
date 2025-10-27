@@ -1,0 +1,7 @@
+Invoke-Command -ComputerName gho-lekari3 -ScriptBlock { 
+
+  Get-LocalUser | Select Name, Enabled, LastLogon 
+
+} 
+
+ 

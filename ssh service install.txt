@@ -1,0 +1,277 @@
+# ===================== НАСТРОЙКИ ===================== 
+
+$Target      = 'gho-lekari3'                         # име/FQDN на целта 
+
+$TargetIP    = '192.168.3.222'                       # IP за порт тест 
+
+$ShareZip    = '\\192.168.8.2\storage\OpenSSH-Win64.zip' 
+
+$ShareUser   = '192.168.8.2\it'                      # акаунт със достъп до шера 
+
+$SharePass   = '1234' 
+
+$DestRoot    = 'C:\Program Files\OpenSSH'            # къде да се инсталира 
+
+$WorkDir     = 'C:\ProgramData\OpenSSH-Temp'         # временна папка на целта 
+
+$RemoteZip   = Join-Path $WorkDir 'OpenSSH-Win64.zip' 
+
+# ==================================================== 
+
+ 
+
+# 0) Проверка за WinRM към целта (порт 5985) 
+
+if (-not (Test-NetConnection -ComputerName $Target -CommonTCPPort WINRM -InformationLevel Quiet)) { 
+
+  throw "Няма WinRM достъп до $Target (5985)." 
+
+} 
+
+ 
+
+# 1) Копиране от шера + ТИХА инсталация на OpenSSH (без прозорци) 
+
+$remote = Invoke-Command -ComputerName $Target -ArgumentList $ShareZip,$ShareUser,$SharePass,$DestRoot,$WorkDir,$RemoteZip -ScriptBlock { 
+
+  param($ShareZip,$ShareUser,$SharePass,$DestRoot,$WorkDir,$RemoteZip) 
+
+  $ErrorActionPreference = 'Stop' 
+
+  $ProgressPreference    = 'SilentlyContinue' 
+
+ 
+
+  # --- Универсално разархивиране с fallback към COM (без UI) --- 
+
+  function Expand-ZipUniversal { 
+
+    param([Parameter(Mandatory)] [string]$ZipPath, 
+
+          [Parameter(Mandatory)] [string]$DestDir) 
+
+ 
+
+    if (-not (Test-Path $ZipPath)) { throw "ZIP липсва: $ZipPath" } 
+
+    if (-not (Test-Path $DestDir)) { New-Item -ItemType Directory -Path $DestDir -Force | Out-Null } 
+
+ 
+
+    # 1) Ако има Expand-Archive (PS5+) 
+
+    if (Get-Command Expand-Archive -ErrorAction SilentlyContinue) { 
+
+      Expand-Archive -Path $ZipPath -DestinationPath $DestDir -Force 
+
+      return 
+
+    } 
+
+ 
+
+    # 2) Fallback: COM Shell.Application – без прозорци, с overwrite 
+
+    $shell = New-Object -ComObject Shell.Application 
+
+    $zipNs = $shell.NameSpace($ZipPath)  ; if (-not $zipNs) { throw "Shell.Application не отвори: $ZipPath" } 
+
+    $dstNs = $shell.NameSpace($DestDir)  ; if (-not $dstNs) { throw "Shell.Application не вижда: $DestDir" } 
+
+    # 0x10 No UI, 0x04 No progress, 0x200 Overwrite 
+
+    $flags = 0x10 -bor 0x04 -bor 0x200 
+
+    $dstNs.CopyHere($zipNs.Items(), $flags) 
+
+    Start-Sleep -Milliseconds 800 
+
+  } 
+
+ 
+
+  # 1.1 Работна папка 
+
+  if (-not (Test-Path $WorkDir)) { New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null } 
+
+ 
+
+  # 1.2 Монтирай шера с креденшъли (в отдалечената сесия) 
+
+  $sec  = ConvertTo-SecureString $SharePass -AsPlainText -Force 
+
+  $cred = New-Object System.Management.Automation.PSCredential($ShareUser, $sec) 
+
+  $drvName = "Z{0}" -f (Get-Random -Minimum 100 -Maximum 999) 
+
+  New-PSDrive -Name $drvName -PSProvider FileSystem -Root ([System.IO.Path]::GetDirectoryName($ShareZip)) -Credential $cred -Scope Global | Out-Null 
+
+ 
+
+  try { 
+
+    $srcZip = Join-Path ("$drvName`:") ([System.IO.Path]::GetFileName($ShareZip)) 
+
+    if (-not (Test-Path $srcZip)) { throw "Не намирам ZIP на шера: $srcZip" } 
+
+ 
+
+    # 1.3 Копирай локално на целта 
+
+    Copy-Item $srcZip $RemoteZip -Force 
+
+    if (-not (Test-Path $RemoteZip)) { throw "ZIP липсва след копиране: $RemoteZip" } 
+
+ 
+
+    # 1.4 Премахни стара инсталация (тихо) 
+
+    if (Test-Path $DestRoot) { 
+
+      try { 
+
+        $svc = Get-Service -Name sshd -ErrorAction SilentlyContinue 
+
+        if ($svc) { Stop-Service sshd -Force -ErrorAction SilentlyContinue } 
+
+        $un = Join-Path $DestRoot 'uninstall-sshd.ps1' 
+
+        if (Test-Path $un) { 
+
+          Start-Process -FilePath powershell.exe -ArgumentList "-ExecutionPolicy Bypass -NoLogo -NoProfile -WindowStyle Hidden -File `"$un`"" -Wait -WindowStyle Hidden 
+
+        } 
+
+        Remove-Item $DestRoot -Recurse -Force -ErrorAction SilentlyContinue 
+
+      } catch {} 
+
+    } 
+
+    New-Item -ItemType Directory -Path $DestRoot -Force | Out-Null 
+
+ 
+
+    # 1.5 Разархивирай пакета 
+
+    Expand-ZipUniversal -ZipPath $RemoteZip -DestDir $DestRoot 
+
+ 
+
+    # 1.6 Ако файловете са в подпапка → премести нагоре 
+
+    $ps1 = Get-ChildItem -Path $DestRoot -Recurse -Filter 'install-sshd.ps1' -File -ErrorAction SilentlyContinue | Select-Object -First 1 
+
+    if (-not $ps1) { throw "В ZIP-а липсва install-sshd.ps1. Вероятно архивът не е Win32-OpenSSH." } 
+
+    $pkgDir = Split-Path $ps1.FullName -Parent 
+
+    if ($pkgDir -ne $DestRoot) { 
+
+      Get-ChildItem -Path $pkgDir -Force | ForEach-Object { 
+
+        $targetPath = Join-Path $DestRoot $_.Name 
+
+        if (Test-Path $targetPath) { Remove-Item $targetPath -Recurse -Force } 
+
+        Move-Item $_.FullName -Destination $DestRoot -Force 
+
+      } 
+
+      # Почисти празните директории 
+
+      Get-ChildItem -Path $DestRoot -Recurse -Directory | Where-Object { (Get-ChildItem $_.FullName -Force).Count -eq 0 } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue 
+
+    } 
+
+ 
+
+    # 1.7 Инсталирай услугите ТИХО 
+
+    $installPs1 = Join-Path $DestRoot 'install-sshd.ps1' 
+
+    Start-Process -FilePath powershell.exe -ArgumentList "-ExecutionPolicy Bypass -NoLogo -NoProfile -WindowStyle Hidden -File `"$installPs1`"" -Wait -WindowStyle Hidden 
+
+ 
+
+    # 1.8 Услуги + Firewall (тихо) 
+
+    Try { Set-Service sshd -StartupType Automatic } Catch {} 
+
+    Try { Set-Service ssh-agent -StartupType Automatic } Catch {} 
+
+    Try { Start-Service sshd } Catch {} 
+
+    Try { Start-Service ssh-agent } Catch {} 
+
+ 
+
+    $fwName = 'OpenSSH-Server-In-TCP' 
+
+    $fw = Get-NetFirewallRule -DisplayName $fwName -ErrorAction SilentlyContinue 
+
+    if (-not $fw) { 
+
+      New-NetFirewallRule -Name $fwName -DisplayName $fwName -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null 
+
+    } else { 
+
+      Enable-NetFirewallRule -DisplayName $fwName | Out-Null 
+
+    } 
+
+ 
+
+    # 1.9 Финален статус от целта 
+
+    $sshd   = Get-Service sshd -ErrorAction SilentlyContinue 
+
+    $listen = Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue 
+
+    $ver    = if (Test-Path (Join-Path $DestRoot 'sshd.exe')) { (Get-Command (Join-Path $DestRoot 'sshd.exe')).FileVersionInfo.FileVersion } else { '' } 
+
+ 
+
+    [pscustomobject]@{ 
+
+      InstalledFrom = $ShareZip 
+
+      Version       = $ver 
+
+      SshdStatus    = if ($sshd) { $sshd.Status } else { 'NotFound' } 
+
+      Listening22   = [bool]$listen 
+
+      DestRoot      = $DestRoot 
+
+    } 
+
+  } 
+
+  finally { 
+
+    Remove-PSDrive -Name $drvName -Force -ErrorAction SilentlyContinue 
+
+  } 
+
+} 
+
+ 
+
+
+
+$remote | Format-List 
+
+ 
+
+$portOK = (Test-NetConnection -ComputerName $TargetIP -Port 22 -InformationLevel Quiet) 
+
+if ($portOK) { 
+
+  Write-Host ("SSH 22 reachable from here: {0}" -f $portOK) -ForegroundColor Green 
+
+} else { 
+
+  Write-Host ("SSH 22 reachable from here: {0}" -f $portOK) -ForegroundColor Red 
+
+} 

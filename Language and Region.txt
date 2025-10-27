@@ -1,0 +1,145 @@
+$primaryLanguage = "en-US" 
+
+$secondaryLanguage = "bg-BG" 
+
+  
+
+$keyboardLayouts = @{ 
+
+    "bgPhonetic" = "0402:00020402"             # Българска фонетична 
+
+    "bgTraditionalPhonetic" = "0402:00040402" # Българска традиционна фонетична 
+
+    "en" = "0409:00000409"                    # Английска 
+
+} 
+
+ 
+
+$bgLanguagePackages = @( 
+
+    "Language.Basic~~~bg-BG~0.0.1.0", 
+
+    "Language.Handwriting~~~bg-BG~0.0.1.0", 
+
+    "Language.OCR~~~bg-BG~0.0.1.0", 
+
+    "Language.Speech~~~bg-BG~0.0.1.0", 
+
+    "Language.TextToSpeech~~~bg-BG~0.0.1.0" 
+
+) 
+
+  
+
+$installedPackages = Get-WindowsCapability -Online | Where-Object { $_.State -eq 'Installed' } 
+
+foreach ($package in $bgLanguagePackages) { 
+
+    if (-not $installedPackages.Name -contains $package) { 
+
+        try { 
+
+            Add-WindowsCapability -Online -Name $package -ErrorAction Stop 
+
+            Write-Host "Успешно инсталиран пакет: $package" 
+
+        } catch { 
+
+            Write-Warning "Неуспешно инсталиране на пакет: $package" 
+
+        } 
+
+    } 
+
+} 
+
+  
+
+Set-WinUILanguageOverride -Language $primaryLanguage 
+
+Set-WinUserLanguageList -LanguageList @($primaryLanguage, $secondaryLanguage) -Force 
+
+  
+
+Set-Culture -CultureInfo $secondaryLanguage 
+
+Set-WinSystemLocale -SystemLocale $secondaryLanguage 
+
+  
+
+try { 
+
+    Set-ItemProperty -Path "HKCU:\Control Panel\International\Geo" -Name Nation -Value 85 
+
+    Write-Host "Домашната локация е успешно зададена на България чрез регистъра." 
+
+} catch { 
+
+    Write-Warning "Неуспешно задаване на домашната локация чрез регистъра." 
+
+} 
+
+  
+
+try { 
+
+    $currentRegion = Get-ItemProperty -Path "HKCU:\Control Panel\International\Geo" -Name Nation 
+
+    if ($currentRegion.Nation -eq 85) { # Проверка за Geo ID на България 
+
+        Write-Host "Регионът е коректно настроен на България." 
+
+    } else { 
+
+        Write-Warning "Регионът не е правилно настроен." 
+
+    } 
+
+} catch { 
+
+    Write-Warning "Неуспешно извличане на текущата домашна локация." 
+
+} 
+
+  
+
+try { 
+
+    Set-TimeZone -Id "FLE Standard Time" 
+
+    Write-Host "Часовата зона е успешно променена на София (Bulgaria)." 
+
+} catch { 
+
+    Write-Warning "Неуспешно задаване на часова зона. Проверете административните права и командата Set-TimeZone." 
+
+} 
+
+  
+
+$languageList = New-WinUserLanguageList -Language $secondaryLanguage 
+
+$languageList[0].InputMethodTips.Add($keyboardLayouts["bgPhonetic"]) 
+
+$languageList[0].InputMethodTips.Add($keyboardLayouts["bgTraditionalPhonetic"]) 
+
+  
+
+$primaryLangEntry = New-WinUserLanguageList -Language $primaryLanguage 
+
+$primaryLangEntry[0].InputMethodTips.Add($keyboardLayouts["en"]) # Добавяне на английска подредба 
+
+  
+
+$languageList.Add($primaryLangEntry[0]) 
+
+  
+
+Set-WinUserLanguageList -LanguageList $languageList -Force 
+
+  
+
+Write-Host "Конфигурацията е завършена успешно." 
+
+ 

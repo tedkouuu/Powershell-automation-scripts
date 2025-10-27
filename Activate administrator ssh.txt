@@ -1,0 +1,63 @@
+
+
+$Target = 'gho-priemen' 
+
+$Cred   = Get-Credential   # домейн или локален админ с права на целта 
+
+$so     = New-PSSessionOption -OperationTimeout 120000 
+
+  
+
+
+
+Invoke-Command -ComputerName $Target -Credential $Cred -SessionOption $so -ScriptBlock { 
+
+  try { 
+
+    # Намери вградения локален админ по RID 500 (работи дори да е преименуван) 
+
+    $admin = Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True AND SID LIKE '%-500'" 
+
+    if (-not $admin) { throw "Не намирам локалния вграден Administrator (RID 500)." } 
+
+  
+
+   
+
+    $sec = ConvertTo-SecureString '12345678' -AsPlainText -Force 
+
+    Set-LocalUser -Name $admin.Name -Password $sec 
+
+  
+
+
+
+    Enable-LocalUser -Name $admin.Name 
+
+  
+
+
+
+    $u = Get-LocalUser -Name $admin.Name 
+
+    [PSCustomObject]@{ 
+
+      LocalAdminName = $u.Name 
+
+      Enabled        = $u.Enabled 
+
+      PasswordLastSet= $u.PasswordLastSet 
+
+    } 
+
+  } 
+
+  catch { 
+
+    Write-Error $_ 
+
+  } 
+
+} 
+
+ 

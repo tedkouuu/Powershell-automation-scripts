@@ -1,0 +1,167 @@
+# Инсталиране на Chrome, FortiClient, RadiAnt, TightVNC, WinRAR   
+
+# Конфигуриране на hosts файл и WebClient от NAS (192.168.7.199\it_storage) 
+
+  
+
+
+
+$nasIP     = "192.168.7.199"   
+
+$sharePath = "it_storage"   
+
+$username  = "it"   
+
+$password  = ConvertTo-SecureString "Supply@2369" -AsPlainText -Force   
+
+$cred      = New-Object System.Management.Automation.PSCredential($username, $password)   
+
+$driveName = "Z"     # буква за картографиране   
+
+  
+
+function Invoke-FromNAS {   
+
+    param(   
+
+        [string]$TargetFilter,   
+
+        [string]$Description   
+
+    )   
+
+    Write-Host "`n--- Стартиране на $Description от NAS ---" -ForegroundColor Cyan   
+
+    try {   
+
+        New-PSDrive -Name $driveName -PSProvider FileSystem -Root "\\$nasIP\$sharePath" -Credential $cred -ErrorAction Stop | Out-Null   
+
+        Write-Host "Картографирах $driveName`: на \\$nasIP\$sharePath" -ForegroundColor Green   
+
+    } catch {   
+
+        Write-Host "Грешка при картографиране: $_" -ForegroundColor Red   
+
+        return   
+
+    }   
+
+    $root = "$driveName`:\"   
+
+    $installer = Get-ChildItem -Path $root -Recurse -Filter $TargetFilter -ErrorAction SilentlyContinue |   
+
+                 Select-Object -First 1   
+
+    if ($installer) {   
+
+        Write-Host "Намерих: $($installer.FullName)" -ForegroundColor Cyan   
+
+        Start-Process -FilePath $installer.FullName -Wait   
+
+    } else {   
+
+        Write-Host "Не намерих инсталатор с филтър '$TargetFilter'." -ForegroundColor Yellow   
+
+    }   
+
+    Remove-PSDrive -Name $driveName -Force   
+
+} 
+
+  
+
+# 1. Google Chrome   
+
+Write-Host "`n=== Инсталиране на Google Chrome ===" -ForegroundColor Magenta   
+
+$Temp      = $env:TEMP   
+
+$ChromeExe = "chrome_installer.exe"   
+
+$ChromeURL = "http://dl.google.com/chrome/install/375.126/chrome_installer.exe"   
+
+(New-Object System.Net.WebClient).DownloadFile($ChromeURL, "$Temp\$ChromeExe")   
+
+Start-Process "$Temp\$ChromeExe" -ArgumentList "/silent","/install" -Wait   
+
+Remove-Item "$Temp\$ChromeExe" -Force -ErrorAction SilentlyContinue   
+
+  
+
+# 2. FortiClient (директно от root на it_storage)   
+
+Invoke-FromNAS -TargetFilter "FortiClientSetup_6.0.0.0067_x64*" -Description "FortiClient"   
+
+  
+
+# 3. RadiAnt Viewer   
+
+Invoke-FromNAS -TargetFilter "RadiAnt-2025.1-Setup*" -Description "RadiAnt Viewer"   
+
+  
+
+# 4. TightVNC   
+
+Write-Host "`n=== Инсталиране на TightVNC ===" -ForegroundColor Magenta   
+
+$DL      = [IO.Path]::Combine($env:USERPROFILE, "Downloads")   
+
+$TVNCmsi = "tightvnc-setup.msi"   
+
+$TVNCurl = "https://www.tightvnc.com/download/2.8.81/tightvnc-2.8.81-gpl-setup-64bit.msi"   
+
+(New-Object System.Net.WebClient).DownloadFile($TVNCurl, "$DL\$TVNCmsi")   
+
+Start-Process "$DL\$TVNCmsi" -Wait   
+
+Remove-Item "$DL\$TVNCmsi" -Force   
+
+  
+
+# 5. WinRAR   
+
+Write-Host "`n=== Инсталиране на WinRAR ===" -ForegroundColor Magenta   
+
+$RarExe = "winrar-x64-701.exe"   
+
+$RarURL = "https://www.win-rar.com/fileadmin/winrar-versions/winrar/winrar-x64-701.exe"   
+
+(New-Object System.Net.WebClient).DownloadFile($RarURL, "$DL\$RarExe")   
+
+Start-Process "$DL\$RarExe" -Wait   
+
+Remove-Item "$DL\$RarExe" -Force   
+
+  
+
+# 6. hosts файл   
+
+Write-Host "`n=== Добавяне в hosts файл ===" -ForegroundColor Magenta   
+
+$hosts = "$env:SystemRoot\System32\drivers\etc\hosts"   
+
+$entry = "78.130.187.68 plaza400282"   
+
+if (-not (Select-String -Path $hosts -Pattern $entry -Quiet)) {   
+
+    Add-Content -Path $hosts -Value $entry   
+
+    Write-Host "Добавен: $entry" -ForegroundColor Green   
+
+} else {   
+
+    Write-Host "Вече съществува." -ForegroundColor Yellow   
+
+}   
+
+  
+
+# 7. WebClient_AllUsers_plaza400282   
+
+Invoke-FromNAS -TargetFilter "WebClient_AllUsers_plaza400282*" -Description "WebClient_AllUsers"   
+
+  
+
+Write-Host "`n=== Всички операции приключиха успешно! ===" -ForegroundColor Green 
+
+ 
